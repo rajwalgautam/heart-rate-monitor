@@ -416,7 +416,7 @@ Each phase ends with a **gate** that must pass before the next phase starts.
 ### Phase 6 — Infrastructure (Epic E)
 
 17. **Config plugins & signing.** Port the four plugins from `its-a-rock`. **Requires manual action outside this repo:** generate the release keystore and add `KEYSTORE_BASE64` and the related secrets to the GitHub repository. This cannot be automated from the codebase.
-18. **CI / release workflow.** Adapt `android-apk-release.yml` for same-repo releases (it is already the same-repo variant in `its-a-rock`, so this is largely a name swap). Also requires the `RELEASE_DEPLOY_KEY` secret and a matching branch-protection bypass.
+18. **CI / release workflow.** Adapt `android-apk-release.yml` for same-repo releases (it is already the same-repo variant in `its-a-rock`, so this is largely a name swap). `RELEASE_DEPLOY_KEY` is **not** required here: unlike `its-a-rock`, this repo is private on a free plan where branch protection is unavailable, so `GITHUB_TOKEN` can push the version bump directly. See `docs/releasing.md`.
 19. **In-app updates.** Port `versionCompare.ts` and `updateChecker.ts`, pointed at this repo's releases API.
 20. **Documentation.** `docs/releasing.md` and `docs/testing.md`, adapted from `its-a-rock`.
 

@@ -10,10 +10,16 @@
 #
 # Unlike water-tracker (which publishes to a separate release repo via a PAT),
 # Heart Rate Monitor publishes the APK as a Release in THIS repo using the built-in
-# GITHUB_TOKEN. No RELEASE_REPO_TOKEN is needed. The version-bump commit is
-# pushed to main over SSH via the RELEASE_DEPLOY_KEY secret (a write deploy key
-# with a bypass on the "Protect main" ruleset), since GITHUB_TOKEN can't push
-# past the required-PR rule.
+# GITHUB_TOKEN. No RELEASE_REPO_TOKEN is needed.
+#
+# RELEASE_DEPLOY_KEY is OPTIONAL here and currently unset. In its-a-rock it
+# carries the version-bump commit over SSH because a "Protect main" ruleset
+# blocks GITHUB_TOKEN. This repo is private on a free plan, where rulesets and
+# branch protection are unavailable, so main is unprotected and the create-tag
+# job's `permissions: contents: write` is enough to push directly. An unset
+# secret interpolates to an empty string and actions/checkout falls back to
+# token auth. Set the secret if main ever becomes protected — see
+# docs/releasing.md.
 name: CI / Release
 
 run-name: >-
