@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "Heart Rate Monitor",
+    "slug": "heart-rate-monitor",
+    "version": "0.0.0",
+    "scheme": "heartratemonitor",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.heartratemonitor.app",
+      "softwareKeyboardLayoutMode": "pan",
+      "permissions": [
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.health.READ_HEART_RATE",
+        "android.permission.REQUEST_INSTALL_PACKAGES",
+        "android.permission.VIBRATE"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "neverForLocation": true
+        }
+      ],
+      "./plugins/withAndroidCompileSdk",
+      "./plugins/withAndroidMaterialPin",
+      "./plugins/withAndroidSigning",
+      "./plugins/withGradleProperties",
+      "./plugins/withHealthConnect"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
