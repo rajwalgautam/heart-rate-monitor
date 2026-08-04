@@ -6,7 +6,7 @@
 // lifecycle contract in implementation.md §8.1 enforceable rather than
 // aspirational — a caller cannot start something it has no way to stop.
 
-import { BleManager as PlxManager } from 'react-native-ble-plx';
+import { BleManager as PlxManager, type Device } from 'react-native-ble-plx';
 import { PermissionsAndroid, Platform } from 'react-native';
 import {
   HEART_RATE_MEASUREMENT_UUID,
@@ -20,6 +20,17 @@ import type { BleDevice } from '@/types';
 export type Disposer = () => void;
 
 let manager: PlxManager | null = null;
+
+/**
+ * The live `Device` instance, held from connect until disconnect.
+ *
+ * ble-plx scopes service discovery to a connection *and* to the `Device` object
+ * that performed it. Monitoring a characteristic on a different instance — even
+ * one for the same peripheral — fails with `ServiceNotFound`, because that
+ * instance never ran discovery. Keeping the discovered instance here is what
+ * guarantees connect and subscribe operate on the same object.
+ */
+let connected: Device | null = null;
 
 /**
  * The ble-plx manager is created lazily: constructing it initializes the native
@@ -109,13 +120,20 @@ export function scanForDevices(
 }
 
 /**
- * Connect and discover services. Returns the normalized device so the caller
- * can record what it actually connected to (the advertised name is often only
- * available post-connection).
+ * Connect, discover services, and verify the peripheral actually exposes the
+ * Heart Rate Service. Returns the normalized device so the caller can record
+ * what it connected to (the advertised name is often only available
+ * post-connection).
+ *
+ * The discovered `Device` is retained in module scope — see `connected`.
  */
 export async function connectToDevice(deviceId: string): Promise<BleDevice> {
   const device = await getManager().connectToDevice(deviceId);
   await device.discoverAllServicesAndCharacteristics();
+
+  await assertHeartRateService(device);
+  connected = device;
+
   return {
     id: device.id,
     name: device.name ?? null,
@@ -124,51 +142,82 @@ export async function connectToDevice(deviceId: string): Promise<BleDevice> {
 }
 
 /**
- * Subscribe to the Heart Rate Measurement characteristic.
+ * Fail early, and legibly, when a peripheral advertises `0x180D` but does not
+ * expose it once connected.
+ *
+ * This is a real wearable behaviour, not a theoretical one: several trackers
+ * gate the standard Heart Rate Service behind an explicit "broadcast heart
+ * rate" mode and only serve it while that mode is on. Without this check the
+ * user sees ble-plx's raw `Service <uuid> for device <id> not found`, which
+ * reads like a bug in the app rather than something they can act on.
+ */
+async function assertHeartRateService(device: Device): Promise<void> {
+  const services = await device.services();
+  const hasHeartRate = services.some(
+    (s) => s.uuid.toLowerCase() === HEART_RATE_SERVICE_UUID.toLowerCase(),
+  );
+  if (!hasHeartRate) {
+    throw new Error(
+      'This device connected but is not exposing the Heart Rate Service. ' +
+        'If it has a "broadcast heart rate" or workout mode, turn that on and reconnect.',
+    );
+  }
+}
+
+/**
+ * Subscribe to the Heart Rate Measurement characteristic on the already
+ * connected device.
+ *
+ * Deliberately takes no device id and does no connecting. Connecting is
+ * `connectToDevice`'s job; a subscribe that quietly opens its own connection is
+ * what previously produced two `Device` instances where only the discarded one
+ * had run discovery. Requiring a prior connect also lets the disposer be
+ * synchronous rather than chaining off a pending promise.
  *
  * Packets that fail to parse are dropped silently rather than surfaced as
  * errors: a single garbled notification in a ~1/second stream is noise, and
  * raising it would flicker the UI into an error state for one bad frame.
  */
 export function subscribeHeartRate(
-  deviceId: string,
   onReading: (bpm: number) => void,
   onError?: (error: Error) => void,
 ): Disposer {
+  const device = connected;
+  if (device === null) {
+    onError?.(new Error('Not connected to a device.'));
+    return () => undefined;
+  }
+
+  let subscription: { remove: () => void } | null = null;
+  try {
+    subscription = device.monitorCharacteristicForService(
+      HEART_RATE_SERVICE_UUID,
+      HEART_RATE_MEASUREMENT_UUID,
+      (error, characteristic) => {
+        if (error !== null) {
+          onError?.(error);
+          return;
+        }
+        const bpm = parseHeartRateValue(characteristic?.value ?? null);
+        if (bpm !== null) onReading(bpm);
+      },
+    );
+  } catch (error) {
+    onError?.(error instanceof Error ? error : new Error(String(error)));
+    return () => undefined;
+  }
+
   let removed = false;
-
-  const subscription = getManager()
-    .connectToDevice(deviceId)
-    .then((device) =>
-      device.monitorCharacteristicForService(
-        HEART_RATE_SERVICE_UUID,
-        HEART_RATE_MEASUREMENT_UUID,
-        (error, characteristic) => {
-          if (error !== null) {
-            onError?.(error);
-            return;
-          }
-          const bpm = parseHeartRateValue(characteristic?.value ?? null);
-          if (bpm !== null) onReading(bpm);
-        },
-      ),
-    )
-    .catch((error: unknown) => {
-      onError?.(error instanceof Error ? error : new Error(String(error)));
-      return null;
-    });
-
   return () => {
     if (removed) return;
     removed = true;
-    // The subscription may still be resolving when teardown runs (a fast
-    // navigate-away); chaining means it is removed whenever it lands.
-    void subscription.then((sub) => sub?.remove());
+    subscription?.remove();
   };
 }
 
 /** Drop the connection. Safe to call when nothing is connected. */
 export async function disconnect(deviceId: string): Promise<void> {
+  connected = null;
   try {
     await getManager().cancelDeviceConnection(deviceId);
   } catch {
@@ -179,11 +228,17 @@ export async function disconnect(deviceId: string): Promise<void> {
 
 /** Notified when the peripheral drops out on its own (out of range, battery). */
 export function onDisconnected(deviceId: string, callback: () => void): Disposer {
-  const subscription = getManager().onDeviceDisconnected(deviceId, () => callback());
+  const subscription = getManager().onDeviceDisconnected(deviceId, () => {
+    // The retained instance is dead once the peripheral drops; holding it would
+    // let a later subscribe monitor a stale connection.
+    connected = null;
+    callback();
+  });
   return () => subscription.remove();
 }
 
-/** Test seam: drops the cached manager so each spec starts clean. */
+/** Test seam: drops the cached manager and connection so each spec starts clean. */
 export function __resetManager(): void {
   manager = null;
+  connected = null;
 }

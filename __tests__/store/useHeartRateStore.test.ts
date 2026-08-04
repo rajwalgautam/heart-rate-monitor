@@ -58,7 +58,9 @@ beforeEach(() => {
     name: 'Mock HRM',
     rssi: -50,
   });
-  mockBle.subscribeHeartRate.mockImplementation((_id, onReading) => {
+  // subscribeHeartRate no longer takes a device id — it operates on the
+  // instance connectToDevice discovered. See issue #2.
+  mockBle.subscribeHeartRate.mockImplementation((onReading) => {
     emitReading = onReading;
     return readingDispose;
   });

@@ -111,8 +111,9 @@ export const useHeartRateStore = create<HeartRateState>((set, get) => ({
     try {
       const device = await Ble.connectToDevice(deviceId);
 
+      // No device id: subscribe operates on the instance `connectToDevice`
+      // just discovered. See BleManager for why that matters.
       readingDisposer = Ble.subscribeHeartRate(
-        deviceId,
         (bpm) => {
           set({ liveHeartRate: bpm });
 
