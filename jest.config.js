@@ -15,6 +15,7 @@ const sharedModuleNameMapper = {
   '^react-native-health-connect$':
     '<rootDir>/src/__mocks__/react-native-health-connect.ts',
   '^@expo/vector-icons$': '<rootDir>/src/__mocks__/expo-vector-icons.tsx',
+  '^react-native-svg$': '<rootDir>/src/__mocks__/react-native-svg.tsx',
 };
 
 const unit = {

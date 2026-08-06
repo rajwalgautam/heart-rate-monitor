@@ -2,7 +2,12 @@ import { create } from 'zustand';
 import * as Ble from '@/ble/BleManager';
 import type { Disposer } from '@/ble/BleManager';
 import { createSession, finalizeSession, insertReading } from '@/db/queries';
-import type { BleDevice, ConnectionState, Session } from '@/types';
+import { summarizeInterval, capSeries } from '@/utils/tracking';
+import {
+  DEFAULT_TRACKING_INTERVAL_MS,
+  MAX_LIVE_CHART_POINTS,
+} from '@/constants/tracking';
+import type { BleDevice, ChartPoint, ConnectionState, Session } from '@/types';
 
 /**
  * Disposers live in module scope, not store state.
@@ -34,19 +39,43 @@ function resetAccumulator(): void {
   accumulator = { count: 0, sum: 0, max: 0 };
 }
 
+/**
+ * Readings received since the last interval tick, and the timer that drains
+ * them.
+ *
+ * Active tracking records one point per interval rather than one per BLE
+ * notification: at a 5-minute cadence that is ~300 readings folded into a
+ * single mean plus its range. The live BPM readout is deliberately *not* gated
+ * by this timer — it updates on every notification, so the headline number
+ * stays real-time while the recorded series stays at the chosen resolution.
+ */
+let intervalBucket: number[] = [];
+let intervalTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopIntervalTimer(): void {
+  if (intervalTimer !== null) {
+    clearInterval(intervalTimer);
+    intervalTimer = null;
+  }
+  intervalBucket = [];
+}
+
 interface HeartRateState {
   connectionState: ConnectionState;
   connectedDevice: BleDevice | null;
   liveHeartRate: number | null;
   discoveredDevices: BleDevice[];
   activeSession: Session | null;
+  /** Points recorded so far in the active session, for the live chart. */
+  sessionSeries: readonly ChartPoint[];
   error: string | null;
 
   startScan: () => Promise<void>;
   stopScan: () => void;
   connectToDevice: (deviceId: string) => Promise<void>;
   disconnect: () => Promise<void>;
-  startSession: () => Promise<void>;
+  /** Begin active tracking at `intervalMs`, recording one point per interval. */
+  startSession: (intervalMs?: number) => Promise<void>;
   endSession: () => Promise<void>;
   /** Release every BLE resource. Idempotent — see §8.1 rule 3. */
   teardown: () => void;
@@ -59,6 +88,7 @@ export const useHeartRateStore = create<HeartRateState>((set, get) => ({
   liveHeartRate: null,
   discoveredDevices: [],
   activeSession: null,
+  sessionSeries: [],
   error: null,
 
   startScan: async () => {
@@ -115,19 +145,20 @@ export const useHeartRateStore = create<HeartRateState>((set, get) => ({
       // just discovered. See BleManager for why that matters.
       readingDisposer = Ble.subscribeHeartRate(
         (bpm) => {
+          // Always live, regardless of the tracking interval — the headline
+          // number reflects the strap, not the recording cadence.
           set({ liveHeartRate: bpm });
 
-          const session = get().activeSession;
-          if (session === null) return;
+          if (get().activeSession === null) return;
 
           accumulator = {
             count: accumulator.count + 1,
             sum: accumulator.sum + bpm,
             max: Math.max(accumulator.max, bpm),
           };
-          // Fire-and-forget: a failed insert must not interrupt the live
-          // stream, and the summary comes from the accumulator regardless.
-          void insertReading(session.id, bpm).catch(() => undefined);
+          // Buffered until the interval timer drains it; the timer is what
+          // writes to the database.
+          intervalBucket.push(bpm);
         },
         (error) => set({ error: error.message }),
       );
@@ -172,16 +203,49 @@ export const useHeartRateStore = create<HeartRateState>((set, get) => ({
     });
   },
 
-  startSession: async () => {
+  startSession: async (intervalMs = DEFAULT_TRACKING_INTERVAL_MS) => {
     if (get().activeSession !== null) return;
+
     resetAccumulator();
-    const session = await createSession();
-    set({ activeSession: session });
+    stopIntervalTimer();
+
+    const session = await createSession(intervalMs);
+    set({ activeSession: session, sessionSeries: [] });
+
+    intervalTimer = setInterval(() => {
+      const summary = summarizeInterval(intervalBucket);
+      intervalBucket = [];
+
+      // An empty interval records no point. The strap dropping out for a
+      // minute should leave a gap in the series, not a run of zeroes.
+      if (summary === null) return;
+
+      const point: ChartPoint = {
+        timestamp: Date.now(),
+        value: summary.mean,
+        min: summary.min,
+        max: summary.max,
+      };
+
+      set((state) => ({
+        sessionSeries: capSeries([...state.sessionSeries, point], MAX_LIVE_CHART_POINTS),
+      }));
+
+      // Fire-and-forget: a failed insert must not interrupt tracking, and the
+      // session summary comes from the accumulator regardless.
+      void insertReading(session.id, summary, point.timestamp).catch(() => undefined);
+    }, intervalMs);
   },
 
   endSession: async () => {
     const session = get().activeSession;
     if (session === null) return;
+
+    // Drain whatever the final, partial interval collected before stopping —
+    // otherwise ending a session always discards up to one interval of data,
+    // which at 5 minutes is a lot to silently lose.
+    const trailing = summarizeInterval(intervalBucket);
+    stopIntervalTimer();
 
     const { count, sum, max } = accumulator;
     const summary = {
@@ -195,6 +259,9 @@ export const useHeartRateStore = create<HeartRateState>((set, get) => ({
     set({ activeSession: null });
     resetAccumulator();
 
+    if (trailing !== null) {
+      await insertReading(session.id, trailing, summary.endTime).catch(() => undefined);
+    }
     await finalizeSession(session.id, summary);
   },
 
@@ -205,6 +272,12 @@ export const useHeartRateStore = create<HeartRateState>((set, get) => ({
     readingDisposer = null;
     disconnectDisposer?.();
     disconnectDisposer = null;
+    // The interval timer is only stopped here when no session is running.
+    // Teardown fires on backgrounding, and §8.1 rule 5 gives an active session
+    // precedence — a backgrounded workout must keep recording.
+    if (useHeartRateStore.getState().activeSession === null) {
+      stopIntervalTimer();
+    }
   },
 
   clearError: () => set({ error: null }),
@@ -216,4 +289,5 @@ export function __resetHeartRateModuleState(): void {
   readingDisposer = null;
   disconnectDisposer = null;
   resetAccumulator();
+  stopIntervalTimer();
 }

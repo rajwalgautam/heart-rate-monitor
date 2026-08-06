@@ -1,5 +1,5 @@
 import { getDatabase } from './database';
-import type { Session, SessionReading } from '@/types';
+import type { IntervalSummary, Session, SessionReading } from '@/types';
 
 interface SessionRow {
   id: number;
@@ -7,6 +7,7 @@ interface SessionRow {
   end_time: number | null;
   avg_hr: number | null;
   max_hr: number | null;
+  interval_ms: number | null;
   created_at: number;
 }
 
@@ -15,6 +16,8 @@ interface ReadingRow {
   session_id: number;
   timestamp: number;
   hr_value: number;
+  hr_min: number | null;
+  hr_max: number | null;
 }
 
 function toSession(row: SessionRow): Session {
@@ -24,6 +27,7 @@ function toSession(row: SessionRow): Session {
     endTime: row.end_time,
     avgHr: row.avg_hr,
     maxHr: row.max_hr,
+    intervalMs: row.interval_ms,
     createdAt: row.created_at,
   };
 }
@@ -34,16 +38,27 @@ function toReading(row: ReadingRow): SessionReading {
     sessionId: row.session_id,
     timestamp: row.timestamp,
     hrValue: row.hr_value,
+    hrMin: row.hr_min,
+    hrMax: row.hr_max,
   };
 }
 
-/** Open a new session. Summary columns stay null until it ends. */
-export async function createSession(startTime: number = Date.now()): Promise<Session> {
+/**
+ * Open a new session. Summary columns stay null until it ends.
+ *
+ * `intervalMs` is recorded here rather than read from settings when the chart
+ * renders, so a past session keeps the cadence it was actually captured at even
+ * after the preference changes.
+ */
+export async function createSession(
+  intervalMs: number,
+  startTime: number = Date.now(),
+): Promise<Session> {
   const db = getDatabase();
   const now = Date.now();
   const result = await db.runAsync(
-    'INSERT INTO sessions (start_time, end_time, avg_hr, max_hr, created_at) VALUES (?, NULL, NULL, NULL, ?)',
-    [startTime, now],
+    'INSERT INTO sessions (start_time, end_time, avg_hr, max_hr, interval_ms, created_at) VALUES (?, NULL, NULL, NULL, ?, ?)',
+    [startTime, intervalMs, now],
   );
   return {
     id: result.lastInsertRowId,
@@ -51,6 +66,7 @@ export async function createSession(startTime: number = Date.now()): Promise<Ses
     endTime: null,
     avgHr: null,
     maxHr: null,
+    intervalMs,
     createdAt: now,
   };
 }
@@ -72,16 +88,19 @@ export async function finalizeSession(
   );
 }
 
-/** Append one live reading. Called at roughly 1 Hz during a session. */
+/**
+ * Append one interval summary. Called once per tracking interval, not once per
+ * BLE notification — see `summarizeInterval`.
+ */
 export async function insertReading(
   sessionId: number,
-  hrValue: number,
+  summary: IntervalSummary,
   timestamp: number = Date.now(),
 ): Promise<void> {
   const db = getDatabase();
   await db.runAsync(
-    'INSERT INTO session_readings (session_id, timestamp, hr_value) VALUES (?, ?, ?)',
-    [sessionId, timestamp, hrValue],
+    'INSERT INTO session_readings (session_id, timestamp, hr_value, hr_min, hr_max) VALUES (?, ?, ?, ?, ?)',
+    [sessionId, timestamp, summary.mean, summary.min, summary.max],
   );
 }
 
@@ -117,4 +136,23 @@ export async function getSessionReadings(sessionId: number): Promise<SessionRead
 export async function deleteSession(id: number): Promise<void> {
   const db = getDatabase();
   await db.runAsync('DELETE FROM sessions WHERE id = ?', [id]);
+}
+
+/**
+ * Sessions that recorded at least one point, newest first.
+ *
+ * The History tab uses this rather than `listSessions` so a session that was
+ * started and immediately stopped — or one that never got a reading because the
+ * strap dropped — does not appear as an empty row with nothing to show.
+ */
+export async function listSessionsWithData(limit = 50): Promise<Session[]> {
+  const db = getDatabase();
+  const rows = await db.getAllAsync<SessionRow>(
+    `SELECT s.* FROM sessions s
+       WHERE EXISTS (SELECT 1 FROM session_readings r WHERE r.session_id = s.id)
+       ORDER BY s.start_time DESC
+       LIMIT ?`,
+    [limit],
+  );
+  return rows.map(toSession);
 }

@@ -5,6 +5,7 @@ import { FONT_SIZE, RADIUS, SHADOW, SPACING } from '@/constants/theme';
 import { useTheme } from '@/theme/ThemeProvider';
 import { useSettingsStore } from '@/store/useSettingsStore';
 import { useHeartRateStore } from '@/store/useHeartRateStore';
+import { TRACKING_INTERVALS } from '@/constants/tracking';
 import {
   formatLastChecked,
   getCurrentVersion,
@@ -27,10 +28,13 @@ export default function SettingsScreen(): React.JSX.Element {
     targetDeviceId,
     targetDeviceName,
     autoConnect,
+    trackingIntervalMs,
     setTargetDevice,
     setAutoConnect,
+    setTrackingInterval,
   } = useSettingsStore();
   const connectedDevice = useHeartRateStore((s) => s.connectedDevice);
+  const isSessionActive = useHeartRateStore((s) => s.activeSession !== null);
 
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
   const [checkStatus, setCheckStatus] = useState<string | null>(null);
@@ -75,6 +79,53 @@ export default function SettingsScreen(): React.JSX.Element {
             );
           })}
         </View>
+      </Section>
+
+      <Section title="Tracking">
+        <Text style={[styles.rowLabel, { color: colors.textPrimary }]}>
+          Sampling interval
+        </Text>
+        <Text style={[styles.rowHint, { color: colors.textMuted }]}>
+          How often an active session records a point. The live BPM readout is
+          unaffected — it always updates as fast as the monitor sends it.
+        </Text>
+        <View style={styles.segmented}>
+          {TRACKING_INTERVALS.map((option) => {
+            const selected = trackingIntervalMs === option.ms;
+            return (
+              <Pressable
+                key={option.ms}
+                onPress={() => setTrackingInterval(option.ms)}
+                disabled={isSessionActive}
+                style={[
+                  styles.segment,
+                  {
+                    backgroundColor: selected ? colors.primary : colors.surfaceAlt,
+                    opacity: isSessionActive ? 0.5 : 1,
+                  },
+                ]}
+                accessibilityRole="button"
+                accessibilityState={{ selected, disabled: isSessionActive }}
+                testID={`interval-${option.ms}`}
+              >
+                <Text
+                  style={[
+                    styles.segmentLabel,
+                    { color: selected ? colors.onPrimary : colors.textSecondary },
+                  ]}
+                >
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        {isSessionActive && (
+          <Text style={[styles.rowHint, { color: colors.warning }]}>
+            Locked while a session is recording — changing the cadence mid-session
+            would make the chart's spacing inconsistent.
+          </Text>
+        )}
       </Section>
 
       <Section title="Bluetooth">
