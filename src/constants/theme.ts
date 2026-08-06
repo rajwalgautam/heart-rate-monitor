@@ -70,7 +70,12 @@ export const DARK: Palette = {
   success: '#22C55E',
   danger: '#F87171',
   warning: '#F59E0B',
-  baseline: '#60A5FA',
+  // Steps down from #60A5FA: that value sits at OKLCH L 0.714, outside the
+  // dark-mode band (0.48–0.67), so it read too light against the chart surface.
+  // #3B82F6 passes the lightness band, chroma floor, CVD separation from
+  // `primary` (ΔE 26.7 protan), and 3:1 contrast. Dark mode is chosen here, not
+  // derived by flipping the light palette.
+  baseline: '#3B82F6',
   tabBar: '#141416',
   tabBarActive: '#EF4444',
   tabBarInactive: '#6B6660',

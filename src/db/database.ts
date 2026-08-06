@@ -43,7 +43,7 @@ export async function initDatabase(): Promise<void> {
 }
 
 /** Latest schema version; bump and add a branch in runMigrations per change. */
-const LATEST_SCHEMA_VERSION = 1;
+const LATEST_SCHEMA_VERSION = 2;
 
 /**
  * Apply pending schema migrations, tracked by SQLite's `user_version`. Fresh
@@ -54,12 +54,47 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
   const row = await database.getFirstAsync<{ user_version: number }>(
     'PRAGMA user_version',
   );
-  const version = row?.user_version ?? 0;
+  let version = row?.user_version ?? 0;
 
-  // v1 is the initial schema created above; nothing to migrate yet. The
-  // scaffolding is kept so the first real change is a one-branch edit.
-  if (version === LATEST_SCHEMA_VERSION) return;
+  if (version < 2) {
+    await migrateToV2(database);
+    version = 2;
+  }
 
+  if (version !== LATEST_SCHEMA_VERSION) version = LATEST_SCHEMA_VERSION;
   // PRAGMA can't be parameterized; the value is a trusted integer constant.
-  await database.execAsync(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION}`);
+  await database.execAsync(`PRAGMA user_version = ${version}`);
+}
+
+/**
+ * v2: active tracking. Each recorded point becomes an interval summary rather
+ * than a lone sample, so `session_readings` gains the interval's range, and
+ * `sessions` records the cadence it was captured at.
+ *
+ * Existing rows were written one-per-notification, where the sample *is* the
+ * whole interval — so they backfill to `hr_min = hr_max = hr_value`, which is
+ * true rather than merely convenient. `interval_ms` stays NULL for those
+ * sessions: they had no fixed cadence, and inventing one would misrepresent
+ * their x-axis. `ADD COLUMN` isn't idempotent, so guard on existing columns.
+ */
+async function migrateToV2(database: SQLite.SQLiteDatabase): Promise<void> {
+  const readingCols = await database.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(session_readings)',
+  );
+  if (!readingCols.some((c) => c.name === 'hr_min')) {
+    await database.execAsync('ALTER TABLE session_readings ADD COLUMN hr_min INTEGER');
+  }
+  if (!readingCols.some((c) => c.name === 'hr_max')) {
+    await database.execAsync('ALTER TABLE session_readings ADD COLUMN hr_max INTEGER');
+  }
+  await database.runAsync(
+    'UPDATE session_readings SET hr_min = hr_value, hr_max = hr_value WHERE hr_min IS NULL',
+  );
+
+  const sessionCols = await database.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(sessions)',
+  );
+  if (!sessionCols.some((c) => c.name === 'interval_ms')) {
+    await database.execAsync('ALTER TABLE sessions ADD COLUMN interval_ms INTEGER');
+  }
 }

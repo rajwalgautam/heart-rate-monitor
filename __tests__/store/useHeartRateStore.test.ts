@@ -58,7 +58,9 @@ beforeEach(() => {
     name: 'Mock HRM',
     rssi: -50,
   });
-  mockBle.subscribeHeartRate.mockImplementation((_id, onReading) => {
+  // subscribeHeartRate no longer takes a device id — it operates on the
+  // instance connectToDevice discovered. See issue #2.
+  mockBle.subscribeHeartRate.mockImplementation((onReading) => {
     emitReading = onReading;
     return readingDispose;
   });
@@ -71,6 +73,7 @@ beforeEach(() => {
     endTime: null,
     avgHr: null,
     maxHr: null,
+    intervalMs: 5_000,
     createdAt: Date.now(),
   });
   mockFinalize.mockResolvedValue(undefined);
@@ -179,17 +182,6 @@ describe('sessions', () => {
     expect(useHeartRateStore.getState().activeSession).toBeNull();
   });
 
-  it('persists each reading during a session', async () => {
-    await useHeartRateStore.getState().connectToDevice('device-1');
-    await useHeartRateStore.getState().startSession();
-
-    emitReading?.(70);
-    emitReading?.(72);
-
-    expect(mockInsertReading).toHaveBeenCalledTimes(2);
-    expect(mockInsertReading).toHaveBeenCalledWith(1, 70);
-  });
-
   it('does not persist readings outside a session', async () => {
     await useHeartRateStore.getState().connectToDevice('device-1');
     emitReading?.(70);
@@ -236,6 +228,7 @@ describe('sessions', () => {
       endTime: null,
       avgHr: null,
       maxHr: null,
+      intervalMs: 5_000,
       createdAt: Date.now(),
     });
     await useHeartRateStore.getState().startSession();
@@ -257,6 +250,160 @@ describe('sessions', () => {
   it('ignores endSession when none is active', async () => {
     await useHeartRateStore.getState().endSession();
     expect(mockFinalize).not.toHaveBeenCalled();
+  });
+});
+
+describe('interval recording', () => {
+  const INTERVAL = 5_000;
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('records one point per interval, not one per reading', async () => {
+    jest.useFakeTimers();
+    await useHeartRateStore.getState().connectToDevice('device-1');
+    await useHeartRateStore.getState().startSession(INTERVAL);
+
+    emitReading?.(70);
+    emitReading?.(72);
+    emitReading?.(74);
+    expect(mockInsertReading).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(INTERVAL);
+
+    expect(mockInsertReading).toHaveBeenCalledTimes(1);
+    expect(mockInsertReading).toHaveBeenCalledWith(
+      1,
+      { mean: 72, min: 70, max: 74 },
+      expect.any(Number),
+    );
+  });
+
+  it('keeps the live readout at the stream rate, not the interval', async () => {
+    jest.useFakeTimers();
+    await useHeartRateStore.getState().connectToDevice('device-1');
+    await useHeartRateStore.getState().startSession(INTERVAL);
+
+    emitReading?.(70);
+    expect(useHeartRateStore.getState().liveHeartRate).toBe(70);
+    emitReading?.(96);
+    // No timer has fired, yet the headline number has already moved.
+    expect(useHeartRateStore.getState().liveHeartRate).toBe(96);
+    expect(mockInsertReading).not.toHaveBeenCalled();
+  });
+
+  it('appends a chart point per interval', async () => {
+    jest.useFakeTimers();
+    await useHeartRateStore.getState().connectToDevice('device-1');
+    await useHeartRateStore.getState().startSession(INTERVAL);
+
+    emitReading?.(80);
+    jest.advanceTimersByTime(INTERVAL);
+    emitReading?.(90);
+    jest.advanceTimersByTime(INTERVAL);
+
+    const series = useHeartRateStore.getState().sessionSeries;
+    expect(series).toHaveLength(2);
+    expect(series[0]).toMatchObject({ value: 80, min: 80, max: 80 });
+    expect(series[1]).toMatchObject({ value: 90, min: 90, max: 90 });
+  });
+
+  it('records nothing for an interval that received no readings', async () => {
+    jest.useFakeTimers();
+    await useHeartRateStore.getState().connectToDevice('device-1');
+    await useHeartRateStore.getState().startSession(INTERVAL);
+
+    // Strap out of range for two intervals — a gap, not a run of zeroes.
+    jest.advanceTimersByTime(INTERVAL * 2);
+
+    expect(mockInsertReading).not.toHaveBeenCalled();
+    expect(useHeartRateStore.getState().sessionSeries).toHaveLength(0);
+  });
+
+  it('flushes the trailing partial interval on end', async () => {
+    jest.useFakeTimers();
+    await useHeartRateStore.getState().connectToDevice('device-1');
+    await useHeartRateStore.getState().startSession(INTERVAL);
+
+    emitReading?.(100);
+    emitReading?.(110);
+    // Stop mid-interval: without a flush this data would be silently dropped,
+    // which at a 5 minute cadence is a lot to lose.
+    await useHeartRateStore.getState().endSession();
+
+    expect(mockInsertReading).toHaveBeenCalledWith(
+      1,
+      { mean: 105, min: 100, max: 110 },
+      expect.any(Number),
+    );
+  });
+
+  it('stops recording after the session ends', async () => {
+    jest.useFakeTimers();
+    await useHeartRateStore.getState().connectToDevice('device-1');
+    await useHeartRateStore.getState().startSession(INTERVAL);
+    await useHeartRateStore.getState().endSession();
+
+    mockInsertReading.mockClear();
+    emitReading?.(70);
+    jest.advanceTimersByTime(INTERVAL * 3);
+
+    expect(mockInsertReading).not.toHaveBeenCalled();
+  });
+
+  it('does not leak a timer across sessions', async () => {
+    jest.useFakeTimers();
+    await useHeartRateStore.getState().connectToDevice('device-1');
+
+    await useHeartRateStore.getState().startSession(INTERVAL);
+    await useHeartRateStore.getState().endSession();
+    mockInsertReading.mockClear();
+
+    await useHeartRateStore.getState().startSession(INTERVAL);
+    emitReading?.(88);
+    jest.advanceTimersByTime(INTERVAL);
+
+    // One interval elapsed, so exactly one write — not two from a stale timer.
+    expect(mockInsertReading).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the series when a new session starts', async () => {
+    jest.useFakeTimers();
+    await useHeartRateStore.getState().connectToDevice('device-1');
+
+    await useHeartRateStore.getState().startSession(INTERVAL);
+    emitReading?.(80);
+    jest.advanceTimersByTime(INTERVAL);
+    expect(useHeartRateStore.getState().sessionSeries).toHaveLength(1);
+
+    await useHeartRateStore.getState().endSession();
+    await useHeartRateStore.getState().startSession(INTERVAL);
+
+    expect(useHeartRateStore.getState().sessionSeries).toHaveLength(0);
+  });
+
+  it('keeps recording when teardown fires during a session', async () => {
+    jest.useFakeTimers();
+    await useHeartRateStore.getState().connectToDevice('device-1');
+    await useHeartRateStore.getState().startSession(INTERVAL);
+
+    // Backgrounding calls teardown; §8.1 rule 5 gives an active session
+    // precedence, so the interval timer must survive.
+    useHeartRateStore.getState().teardown();
+
+    emitReading?.(75);
+    jest.advanceTimersByTime(INTERVAL);
+    expect(mockInsertReading).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the timer when teardown fires with no session', async () => {
+    jest.useFakeTimers();
+    await useHeartRateStore.getState().connectToDevice('device-1');
+    await useHeartRateStore.getState().startSession(INTERVAL);
+    await useHeartRateStore.getState().endSession();
+
+    expect(() => useHeartRateStore.getState().teardown()).not.toThrow();
   });
 });
 

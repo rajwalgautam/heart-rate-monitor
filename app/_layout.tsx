@@ -49,6 +49,7 @@ function Navigator(): React.JSX.Element {
       }}
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="sessions/[id]" options={{ title: 'Session' }} />
     </Stack>
   );
 }

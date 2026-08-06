@@ -32,15 +32,47 @@ export interface Session {
   endTime: number | null;
   avgHr: number | null;
   maxHr: number | null;
+  /**
+   * Sampling cadence this session was recorded at, in ms. Stored per session
+   * rather than read from settings at display time, so a historical chart keeps
+   * the x-axis spacing it was actually captured with even after the preference
+   * changes. Null for sessions recorded before active tracking existed.
+   */
+  intervalMs: number | null;
   createdAt: number;
 }
 
-/** One heart rate sample captured during a session. */
+/**
+ * One recorded point in a session: the mean of every BLE reading in the
+ * interval, plus that interval's range.
+ *
+ * `hrValue` is the mean rather than a single sample — at a 5-minute cadence a
+ * lone sample would discard ~299 readings and let one spike define the point.
+ * `hrMin`/`hrMax` retain the spread the mean hides, so the chart can show a
+ * range band. Both are null for rows written before the range was recorded.
+ */
 export interface SessionReading {
   readonly id: number;
   sessionId: number;
   timestamp: number;
   hrValue: number;
+  hrMin: number | null;
+  hrMax: number | null;
+}
+
+/** A summarized interval, before it is persisted. */
+export interface IntervalSummary {
+  mean: number;
+  min: number;
+  max: number;
+}
+
+/** A point on the live or historical chart. */
+export interface ChartPoint {
+  timestamp: number;
+  value: number;
+  min: number | null;
+  max: number | null;
 }
 
 /**

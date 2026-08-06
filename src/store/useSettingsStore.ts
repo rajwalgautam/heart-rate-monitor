@@ -13,6 +13,7 @@ interface SettingsState extends Settings {
   setThemeMode: (mode: ThemeMode) => void;
   setTargetDevice: (id: string | null, name: string | null) => void;
   setAutoConnect: (value: boolean) => void;
+  setTrackingInterval: (ms: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -38,9 +39,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ autoConnect: value });
     void persist(get);
   },
+
+  setTrackingInterval: (ms) => {
+    set({ trackingIntervalMs: ms });
+    void persist(get);
+  },
 }));
 
 function persist(get: () => SettingsState): Promise<void> {
-  const { themeMode, targetDeviceId, targetDeviceName, autoConnect } = get();
-  return saveSettings({ themeMode, targetDeviceId, targetDeviceName, autoConnect });
+  const { themeMode, targetDeviceId, targetDeviceName, autoConnect, trackingIntervalMs } =
+    get();
+  return saveSettings({
+    themeMode,
+    targetDeviceId,
+    targetDeviceName,
+    autoConnect,
+    trackingIntervalMs,
+  });
 }

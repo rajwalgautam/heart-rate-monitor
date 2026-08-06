@@ -84,6 +84,26 @@ Volume sanity check: foreground-only polling at 30s over one to two hours of rea
 
 `react-native-health-connect` provides an Expo config plugin covering most of the manifest work, but the rationale screen and the degraded path are ours to build. None of this is covered by the four `its-a-rock` build-fix plugins referenced in §9.
 
+### D5 — Active tracking: interval recording and the session chart
+
+**Resolved** (v0.0.2). Active tracking records a session at a chosen cadence and charts it live. The BLE pipeline feeds it; the Health Connect pipeline is untouched and continues to serve only the passive baseline.
+
+| | Decision | Rationale |
+| --- | --- | --- |
+| **Interval scope** | The 5s–5min interval controls **recording and plotting only**. The live BPM readout stays at the stream's own rate (~1 Hz). | A 5-minute interval that also froze the headline number would make the dashboard look broken. The number is a live instrument; the series is a record. |
+| **Interval value** | Each recorded point is the **mean** of the interval's readings, stored with that interval's **min and max**. | At 5 minutes a point covers ~300 readings; a lone sample would discard 299 and let one spike define it. The mean alone hides spread — a steady 118 and a swing from 90–150 both average 118 — so the range is kept and drawn as a band. |
+| **Empty intervals** | Record **no point**, rather than a zero. | A strap dropping out is a gap in the data, not a heart rate of zero. |
+| **Trailing interval** | Flushed on session end. | Otherwise stopping always discards up to one full interval — at 5 minutes, a lot to lose silently. |
+| **Where it's set** | Settings, persisted, validated against the offered presets. **Locked during a session.** | Changing cadence mid-session would make the chart's x-axis spacing inconsistent with itself. |
+| **Cadence provenance** | Stored per session (`sessions.interval_ms`), not read from settings at render time. | A past session must keep the cadence it was actually captured at after the preference changes. Null for pre-v0.0.2 sessions, which had no fixed cadence. |
+| **Charting** | `react-native-svg`, hand-rolled. Geometry lives in `src/utils/chart.ts` as pure functions. | One native dep at the Expo-pinned version, no chart-library API to fight. Keeping the scaling pure is what makes it testable — an inverted axis or a clipped domain is invisible in a snapshot and obvious in an assertion. |
+| **Baseline on the chart** | Drawn as a **dashed, directly-labeled** reference line, and included in the y-domain. | Live-vs-baseline is the app's premise. Including it in the domain prevents the silent clipping that would let a viewer read the baseline as off-scale. Dashed + labeled means its identity never rests on colour alone. |
+| **Historical charts** | Draw **no** baseline. | The 24h baseline is a live rolling value; showing today's against a past session invites a comparison that isn't valid. |
+| **Palette** | `DARK.baseline` moved `#60A5FA` → `#3B82F6`. | `#60A5FA` sits at OKLCH L 0.714, outside the dark-mode band (0.48–0.67). The replacement passes the lightness band, chroma floor, CVD separation from `primary` (ΔE 26.7 protan), and 3:1 contrast. Computed, not eyeballed. |
+| **No touch tooltip** | Deliberate omission. | Hover doesn't exist on a phone, and a scrub gesture on a live-updating chart is separate design work. The live card above already shows the current value — what a tooltip would report. |
+
+**Session control.** The existing "Start session" button remains the single control and gains play/stop iconography. No second button: two ways to start a recording would put two kinds of session in one table.
+
 ---
 
 ## 3. Tech Stack & Conventions
@@ -429,7 +449,7 @@ Each phase ends with a **gate** that must pass before the next phase starts.
 - iOS support.
 - Writing any data to Health Connect.
 - Cloud synchronization or user accounts.
-- Advanced session analysis or charting beyond a simple session summary. (D3 captures the data that would make this additive later.)
+- ~~Advanced session analysis or charting beyond a simple session summary.~~ **Delivered in v0.0.2** — see D5. D3's per-reading capture is what made it additive, as predicted. Still out of scope: statistical analysis beyond mean/min/max, and any comparison *between* sessions.
 - True background execution — foreground services, `WorkManager`, or polling while the app is not running (D2).
 - Standard-deviation / anomaly tracking on heart rate spikes, floated at the end of `prompt.md`. Deferred; `session_readings` (D3) is the data that would enable it.
 

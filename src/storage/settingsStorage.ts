@@ -1,4 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  DEFAULT_TRACKING_INTERVAL_MS,
+  isValidTrackingInterval,
+} from '@/constants/tracking';
 import type { ThemeMode } from '@/types';
 
 const SETTINGS_KEY = '@heartratemonitor/settings';
@@ -11,6 +15,8 @@ export interface Settings {
   targetDeviceName: string | null;
   /** Connect to `targetDeviceId` automatically when the Live tab opens. */
   autoConnect: boolean;
+  /** How often an active session records a point, in ms. */
+  trackingIntervalMs: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -18,6 +24,7 @@ export const DEFAULT_SETTINGS: Settings = {
   targetDeviceId: null,
   targetDeviceName: null,
   autoConnect: false,
+  trackingIntervalMs: DEFAULT_TRACKING_INTERVAL_MS,
 };
 
 const VALID_MODES: ThemeMode[] = ['light', 'dark', 'system'];
@@ -44,6 +51,12 @@ export async function loadSettings(): Promise<Settings> {
         typeof parsed.autoConnect === 'boolean'
           ? parsed.autoConnect
           : DEFAULT_SETTINGS.autoConnect,
+      // Validated against the offered presets, so a value from an older build
+      // (or a hand-edited blob) cannot start a session on an interval the UI
+      // has no way to represent or change.
+      trackingIntervalMs: isValidTrackingInterval(parsed.trackingIntervalMs)
+        ? parsed.trackingIntervalMs
+        : DEFAULT_SETTINGS.trackingIntervalMs,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

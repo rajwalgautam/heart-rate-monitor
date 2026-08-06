@@ -1,5 +1,13 @@
 // Minimal stand-in for react-native-ble-plx. The real module loads a native
 // binary, so tests substitute this and drive it through `__bleMock`.
+//
+// This mock deliberately enforces two of the real library's preconditions,
+// because an earlier, more permissive version modelled a happy path ble-plx
+// does not offer and let a broken connect flow pass 93 tests:
+//
+//   1. `monitorCharacteristicForService` requires discovery to have run on the
+//      *same* Device instance, and throws ServiceNotFound otherwise.
+//   2. Connections are counted, so a spec can assert exactly one per session.
 
 export interface MockCharacteristic {
   value: string | null;
@@ -19,12 +27,23 @@ export const __bleMock = {
   scanStopped: false,
   cancelledConnections: [] as string[],
   connectShouldFail: false,
+  /** How many times connectToDevice has been called. */
+  connectCount: 0,
+  /** Services the connected device reports; defaults to exposing 0x180D. */
+  services: ['0000180d-0000-1000-8000-00805f9b34fb'] as string[],
+  /** Registered disconnect listener, so a spec can simulate a dropout. */
+  disconnectListener: null as
+    | ((error: Error | null, device: MockDevice | null) => void)
+    | null,
   reset(): void {
+    this.disconnectListener = null;
     this.discovered = [];
     this.monitorCallback = null;
     this.scanStopped = false;
     this.cancelledConnections = [];
     this.connectShouldFail = false;
+    this.connectCount = 0;
+    this.services = ['0000180d-0000-1000-8000-00805f9b34fb'];
   },
   /** Push a characteristic value (base64) to the active monitor. */
   emitReading(base64: string): void {
@@ -39,6 +58,8 @@ class MockDevice {
   id: string;
   name: string | null;
   rssi: number | null;
+  /** Per-instance, mirroring ble-plx: discovery does not transfer between objects. */
+  private isDiscovered = false;
 
   constructor(id: string, name: string | null, rssi: number | null) {
     this.id = id;
@@ -47,14 +68,23 @@ class MockDevice {
   }
 
   async discoverAllServicesAndCharacteristics(): Promise<MockDevice> {
+    this.isDiscovered = true;
     return this;
   }
 
+  async services(): Promise<Array<{ uuid: string }>> {
+    return __bleMock.services.map((uuid) => ({ uuid }));
+  }
+
   monitorCharacteristicForService(
-    _service: string,
+    service: string,
     _characteristic: string,
     callback: MonitorCallback,
   ): { remove: () => void } {
+    if (!this.isDiscovered) {
+      // The exact ble-plx failure this mock exists to reproduce.
+      throw new Error(`Service ${service} for device ${this.id} not found`);
+    }
     __bleMock.monitorCallback = callback;
     return {
       remove: () => {
@@ -63,6 +93,8 @@ class MockDevice {
     };
   }
 }
+
+export type Device = MockDevice;
 
 export class BleManager {
   async state(): Promise<string> {
@@ -85,6 +117,7 @@ export class BleManager {
   }
 
   async connectToDevice(id: string): Promise<MockDevice> {
+    __bleMock.connectCount += 1;
     if (__bleMock.connectShouldFail) {
       throw new Error('connection failed');
     }
@@ -97,8 +130,9 @@ export class BleManager {
 
   onDeviceDisconnected(
     _id: string,
-    _listener: (error: Error | null, device: MockDevice | null) => void,
+    listener: (error: Error | null, device: MockDevice | null) => void,
   ): { remove: () => void } {
+    __bleMock.disconnectListener = listener;
     return { remove: () => undefined };
   }
 
