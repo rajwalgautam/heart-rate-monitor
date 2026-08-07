@@ -2,7 +2,7 @@
   "expo": {
     "name": "Heart Rate Monitor",
     "slug": "heart-rate-monitor",
-    "version": "0.0.2-1785983546",
+    "version": "0.0.3-1786076760",
     "scheme": "heartratemonitor",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -18,7 +18,7 @@
         "android.permission.REQUEST_INSTALL_PACKAGES",
         "android.permission.VIBRATE"
       ],
-      "versionCode": 1785983546
+      "versionCode": 1786076760
     },
     "plugins": [
       "expo-router",
