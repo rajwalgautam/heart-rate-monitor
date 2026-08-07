@@ -128,18 +128,19 @@ That secret exists in `its-a-rock` because that repo has a "Protect main" rulese
 requiring pull requests, which the default `GITHUB_TOKEN` cannot push past — so
 the release commit goes over SSH as a deploy key with a ruleset bypass.
 
-This repository is **private on a free GitHub plan**, where rulesets and branch
-protection are unavailable (the API returns *"Upgrade to GitHub Pro or make this
-repository public"*). `main` is therefore unprotected, and the `create-tag` job's
-`permissions: contents: write` is sufficient for `GITHUB_TOKEN` to push the
-version bump directly. When the secret is unset it interpolates to an empty
-string, and `actions/checkout` falls back to token authentication.
+This repository is **public**, so `main` has no ruleset or branch protection by
+default, and the `create-tag` job's `permissions: contents: write` is
+sufficient for `GITHUB_TOKEN` to push the version bump directly. When the
+secret is unset it interpolates to an empty string, and `actions/checkout`
+falls back to token authentication.
 
 Set it only if one of these later becomes true:
 
-- the repo goes public, or the account moves to Pro, **and** you add a ruleset or
-  branch protection on `main`; or
+- you add a ruleset or branch protection on `main`; or
 - you start requiring pull requests for `main`.
+
+(The repo was private until 2026-08-07, which is why it's mentioned here at
+all — see "In-app updates" below for why it was made public.)
 
 If you do need it:
 
@@ -184,6 +185,15 @@ app is offline-first, so a failed update check must never surface as an error.
 
 Note that until the first release exists, the GitHub releases API returns 404 and
 the banner silently renders nothing. That is the intended behaviour, not a bug.
+
+This only works because the repo is **public**. The checker calls the GitHub
+API unauthenticated — no token is shipped in the app — and the releases API
+returns 404 for an unauthenticated request against a *private* repo (to avoid
+leaking its existence), indistinguishable from "no releases yet." The repo was
+private through 2026-08-06, which made every in-app update check fail with
+"Could not reach GitHub." It was switched to public on 2026-08-07 specifically
+to fix this; keep it public, or give the checker an authenticated request path,
+if you ever reintroduce privacy.
 
 ## Build configuration notes
 

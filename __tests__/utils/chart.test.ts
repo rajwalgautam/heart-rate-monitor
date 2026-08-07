@@ -1,10 +1,12 @@
 import {
   buildPolylinePoints,
   buildRangeBandPoints,
+  clampReadoutX,
   computeDomain,
   computeTicks,
   createScale,
   downsample,
+  indexAtX,
   type ChartGeometry,
 } from '@/utils/chart';
 import { summarizeInterval, capSeries } from '@/utils/tracking';
@@ -177,6 +179,61 @@ describe('computeTicks', () => {
 
   it('degrades to the bounds when asked for fewer than two', () => {
     expect(computeTicks({ min: 60, max: 180 }, 1)).toEqual([60, 180]);
+  });
+});
+
+describe('indexAtX', () => {
+  const scale = createScale(GEOMETRY, { min: 60, max: 180 });
+
+  it('is the inverse of scale.x', () => {
+    // Round-trips every index through pixel space and back.
+    for (let i = 0; i < 5; i++) {
+      expect(indexAtX(scale.x(i, 5), GEOMETRY, 5)).toBe(i);
+    }
+  });
+
+  it('snaps to the nearest point, not the one to the left', () => {
+    const mid = (scale.x(1, 5) + scale.x(2, 5)) / 2;
+    // Just past halfway belongs to the second point.
+    expect(indexAtX(mid + 1, GEOMETRY, 5)).toBe(2);
+    expect(indexAtX(mid - 1, GEOMETRY, 5)).toBe(1);
+  });
+
+  it('clamps a touch left of the plot area to the first point', () => {
+    expect(indexAtX(0, GEOMETRY, 5)).toBe(0);
+    expect(indexAtX(-200, GEOMETRY, 5)).toBe(0);
+  });
+
+  it('clamps a touch right of the plot area to the last point', () => {
+    expect(indexAtX(GEOMETRY.width, GEOMETRY, 5)).toBe(4);
+    expect(indexAtX(9999, GEOMETRY, 5)).toBe(4);
+  });
+
+  it('returns the only index for a single-point series', () => {
+    expect(indexAtX(0, GEOMETRY, 1)).toBe(0);
+    expect(indexAtX(GEOMETRY.width, GEOMETRY, 1)).toBe(0);
+  });
+
+  it('returns -1 for an empty series', () => {
+    expect(indexAtX(100, GEOMETRY, 0)).toBe(-1);
+  });
+});
+
+describe('clampReadoutX', () => {
+  it('centres the readout on the point when there is room', () => {
+    expect(clampReadoutX(160, 80, 320)).toBe(120);
+  });
+
+  it('does not overflow the left edge at the first point', () => {
+    expect(clampReadoutX(4, 80, 320)).toBe(0);
+  });
+
+  it('does not overflow the right edge at the last point', () => {
+    expect(clampReadoutX(318, 80, 320)).toBe(240);
+  });
+
+  it('degrades to the left edge when the readout is wider than the chart', () => {
+    expect(clampReadoutX(50, 400, 320)).toBe(0);
   });
 });
 
