@@ -154,6 +154,44 @@ export function computeTicks(
 }
 
 /**
+ * Nearest point index for a touch x — the inverse of `scale.x`.
+ *
+ * Snapping to the nearest point rather than requiring a hit on the marker
+ * itself is what makes the chart usable with a finger: a fingertip is roughly
+ * 44px across against a 4.5px marker, so the touch only has to be *closest*,
+ * never dead-centre. Touches outside the plot area clamp to the end points
+ * instead of returning nothing, so dragging off the edge holds the last
+ * reading rather than flickering the readout away.
+ */
+export function indexAtX(x: number, geometry: ChartGeometry, count: number): number {
+  if (count <= 0) return -1;
+  if (count === 1) return 0;
+
+  const { width, padding } = geometry;
+  const plotWidth = Math.max(1, width - padding.left - padding.right);
+  const ratio = (x - padding.left) / plotWidth;
+  const index = Math.round(ratio * (count - 1));
+
+  return Math.min(count - 1, Math.max(0, index));
+}
+
+/**
+ * Keep the readout inside the chart's horizontal bounds.
+ *
+ * Without this the readout is cut off at exactly the two points a reader is
+ * most likely to inspect — the start and the end of a session.
+ */
+export function clampReadoutX(
+  centerX: number,
+  readoutWidth: number,
+  chartWidth: number,
+): number {
+  const half = readoutWidth / 2;
+  if (readoutWidth >= chartWidth) return 0;
+  return Math.min(chartWidth - readoutWidth, Math.max(0, centerX - half));
+}
+
+/**
  * Reduce a series to at most `maxPoints` by even stride, always keeping the
  * first and last so the visible time span never shrinks.
  *
