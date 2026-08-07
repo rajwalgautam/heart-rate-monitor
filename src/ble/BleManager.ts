@@ -128,7 +128,14 @@ export function scanForDevices(
  * The discovered `Device` is retained in module scope — see `connected`.
  */
 export async function connectToDevice(deviceId: string): Promise<BleDevice> {
-  const device = await getManager().connectToDevice(deviceId);
+  // Android caches a peripheral's GATT service list by MAC address, independent
+  // of what the peripheral currently serves. Without `refreshGatt`, a device
+  // that was ever connected before its "broadcast heart rate" mode was turned
+  // on keeps returning that stale (HR-service-less) cache forever, even after
+  // the mode is enabled and services() ought to reflect it.
+  const device = await getManager().connectToDevice(deviceId, {
+    refreshGatt: 'OnConnected',
+  });
   await device.discoverAllServicesAndCharacteristics();
 
   await assertHeartRateService(device);
